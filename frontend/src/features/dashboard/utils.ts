@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, Coins, DollarSign } from "lucide-react";
+import { Activity, AlertTriangle, Coins, DollarSign, Flame } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import { buildDonutPalette } from "@/utils/colors";
@@ -103,7 +103,59 @@ export function avgPerHour(cost7d: number, hours = 24 * 7): number {
   return cost7d / hours;
 }
 
-const TREND_COLORS = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b"];
+function isFiniteNumber(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function clampPercent(value: number): number {
+  return Math.min(100, Math.max(0, value));
+}
+
+function windowUsedAccountEquivalents(
+  overview: DashboardOverview,
+  windowKey: "primary" | "secondary",
+): number | null {
+  let usedEquivalent = 0;
+  let includedAccounts = 0;
+
+  for (const account of overview.accounts) {
+    const windowMinutes = windowKey === "primary" ? account.windowMinutesPrimary : account.windowMinutesSecondary;
+    const remainingPercent =
+      windowKey === "primary" ? account.usage?.primaryRemainingPercent : account.usage?.secondaryRemainingPercent;
+
+    if (windowMinutes == null || !isFiniteNumber(remainingPercent)) {
+      continue;
+    }
+
+    usedEquivalent += (100 - clampPercent(remainingPercent)) / 100;
+    includedAccounts += 1;
+  }
+
+  return includedAccounts > 0 ? usedEquivalent : null;
+}
+
+function formatBurnEquivalent(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) {
+    return "--";
+  }
+  return value.toFixed(1);
+}
+
+function buildBurnTrend(points: TrendPoint[], currentValue: number | null): { value: number }[] {
+  if (currentValue === null || !Number.isFinite(currentValue) || currentValue <= 0 || points.length === 0) {
+    return [];
+  }
+
+  const lastPoint = points[points.length - 1]?.v ?? 0;
+  if (!Number.isFinite(lastPoint) || lastPoint <= 0) {
+    return points.map(() => ({ value: currentValue }));
+  }
+
+  const scale = currentValue / lastPoint;
+  return points.map((point) => ({ value: Math.max(0, point.v * scale) }));
+}
+
+const TREND_COLORS = ["#3b82f6", "#8b5cf6", "#10b981", "#ef4444", "#f59e0b"];
 
 function trendPointsToValues(points: TrendPoint[]): { value: number }[] {
   return points.map((p) => ({ value: p.v }));
@@ -119,7 +171,15 @@ export function buildDashboardView(
   const metrics = overview.summary.metrics;
   const cost = overview.summary.cost.totalUsd7d;
   const secondaryLabel = formatWindowLabel("secondary", secondaryWindow?.windowMinutes ?? null);
+  const primaryBurnLabel = formatWindowLabel("primary", overview.summary.primaryWindow.windowMinutes ?? null);
+  const secondaryBurnLabel = formatWindowLabel("secondary", overview.summary.secondaryWindow?.windowMinutes ?? null);
   const trends = overview.trends;
+  const primaryBurnEquivalent = windowUsedAccountEquivalents(overview, "primary");
+  const secondaryBurnEquivalent = windowUsedAccountEquivalents(overview, "secondary");
+  const combinedBurnEquivalent =
+    (primaryBurnEquivalent ?? 0) + (secondaryBurnEquivalent ?? 0) > 0
+      ? (primaryBurnEquivalent ?? 0) + (secondaryBurnEquivalent ?? 0)
+      : null;
 
   const stats: DashboardStat[] = [
     {
@@ -147,6 +207,14 @@ export function buildDashboardView(
       trendColor: TREND_COLORS[2],
     },
     {
+      label: `Plus Burn (${primaryBurnLabel}/${secondaryBurnLabel})`,
+      value: `${formatBurnEquivalent(primaryBurnEquivalent)} / ${formatBurnEquivalent(secondaryBurnEquivalent)}`,
+      meta: `Primary ${formatBurnEquivalent(primaryBurnEquivalent)} acc/${primaryBurnLabel} · Secondary ${formatBurnEquivalent(secondaryBurnEquivalent)} acc/${secondaryBurnLabel}`,
+      icon: Flame,
+      trend: buildBurnTrend(trends.tokens, combinedBurnEquivalent),
+      trendColor: TREND_COLORS[3],
+    },
+    {
       label: "Error rate",
       value: formatRate(metrics?.errorRate7d ?? null),
       meta: metrics?.topError
@@ -154,7 +222,7 @@ export function buildDashboardView(
         : `~${formatCompactNumber(Math.round((metrics?.errorRate7d ?? 0) * (metrics?.requests7d ?? 0)))} errors in 7d`,
       icon: AlertTriangle,
       trend: trendPointsToValues(trends.errorRate),
-      trendColor: TREND_COLORS[3],
+      trendColor: TREND_COLORS[4],
     },
   ];
 
